@@ -1,0 +1,183 @@
+# 优化的APK下载脚本 - 使用自定义下载目录
+function Execute-CustomDirectoryDownload {
+    Write-Host "=== 自定义目录APK下载器 ===" -ForegroundColor Magenta
+    
+    # 设置API认证信息和目标文件参数
+    $apiKey = "64f9b720998d47353b6c44d9e53a3fedb92477c5c2d8b13dfbd39ba8721445bd"
+    $targetSHA256 = "56DA65426D3090134B5C209D7C35017B75F0C375CCC86E218FF969760379600A"
+    
+    # 设置自定义下载目录 - 这里是关键的修改
+    $downloadDir = "E:\应用程序"
+    
+    Write-Host "配置信息检查:" -ForegroundColor Blue
+    Write-Host "  目标目录: $downloadDir" -ForegroundColor Cyan
+    Write-Host "  目标APK: superchly.fruit.sric.android" -ForegroundColor Cyan
+    
+    # 验证和创建目录的增强逻辑
+    Write-Host "`n检查目录状态..." -ForegroundColor Yellow
+    
+    try {
+        # 检查E盘是否存在和可访问
+        if (!(Test-Path "E:\")) {
+            Write-Host "✗ 错误：E盘不存在或无法访问" -ForegroundColor Red
+            Write-Host "请确认E盘已正确连接并且可以访问" -ForegroundColor Yellow
+            return $null
+        }
+        Write-Host "✓ E盘可访问" -ForegroundColor Green
+        
+        # 检查目标目录是否存在，如果不存在则创建
+        if (!(Test-Path $downloadDir)) {
+            Write-Host "目录不存在，正在创建..." -ForegroundColor Yellow
+            New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+            Write-Host "✓ 成功创建目录: $downloadDir" -ForegroundColor Green
+        } else {
+            Write-Host "✓ 目录已存在: $downloadDir" -ForegroundColor Green
+        }
+        
+        # 验证目录的写入权限
+        $testFile = Join-Path $downloadDir "write_test.tmp"
+        try {
+            "test" | Out-File -FilePath $testFile -Force
+            Remove-Item -Path $testFile -Force
+            Write-Host "✓ 目录具有写入权限" -ForegroundColor Green
+        } catch {
+            Write-Host "✗ 警告：目录可能没有写入权限" -ForegroundColor Yellow
+            Write-Host "错误详情: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        
+    } catch {
+        Write-Host "✗ 目录创建失败" -ForegroundColor Red
+        Write-Host "错误详情: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $null
+    }
+    
+    # 构造完整的输出文件路径
+    $outputFile = Join-Path $downloadDir "$targetSHA256.apk"
+    $downloadURL = "https://androzoo.uni.lu/api/download?apikey=$apiKey&sha256=$targetSHA256"
+    
+    Write-Host "`n下载配置:" -ForegroundColor Blue
+    Write-Host "  完整文件路径: $outputFile" -ForegroundColor Cyan
+    Write-Host "  预期文件大小: 未知（下载后确定）" -ForegroundColor Cyan
+    
+    # 检查是否存在同名文件
+    if (Test-Path $outputFile) {
+        $existingSize = (Get-Item $outputFile).Length
+        $existingTime = (Get-Item $outputFile).LastWriteTime
+        Write-Host "`n发现现有文件:" -ForegroundColor Yellow
+        Write-Host "  大小: $([math]::Round($existingSize/1MB, 2)) MB" -ForegroundColor Cyan
+        Write-Host "  修改时间: $existingTime" -ForegroundColor Cyan
+        
+        # 提供用户选择是否覆盖现有文件
+        Write-Host "`n选择操作:" -ForegroundColor Magenta
+        Write-Host "1. 覆盖现有文件" -ForegroundColor White
+        Write-Host "2. 保留现有文件（跳过下载）" -ForegroundColor White
+        Write-Host "3. 重命名新文件" -ForegroundColor White
+        
+        do {
+            $choice = Read-Host "请输入选择 (1/2/3)"
+        } while ($choice -notin @('1', '2', '3'))
+        
+        switch ($choice) {
+            '2' {
+                Write-Host "保留现有文件，下载已取消" -ForegroundColor Yellow
+                return $outputFile
+            }
+            '3' {
+                $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+                $outputFile = Join-Path $downloadDir "${targetSHA256}_${timestamp}.apk"
+                Write-Host "新文件将保存为: $outputFile" -ForegroundColor Cyan
+            }
+            Default {
+                Write-Host "将覆盖现有文件" -ForegroundColor Yellow
+            }
+        }
+    }
+    
+    # 执行下载过程
+    try {
+        Write-Host "`n开始下载过程..." -ForegroundColor Green
+        Write-Host "连接到AndroZoo服务器..." -ForegroundColor Yellow
+        
+        # 使用经过验证的下载方法
+        $startTime = Get-Date
+        Invoke-WebRequest -Uri $downloadURL -OutFile $outputFile -UseBasicParsing
+        $endTime = Get-Date
+        $downloadDuration = $endTime - $startTime
+        
+        # 验证下载结果的详细信息
+        if (Test-Path $outputFile) {
+            $fileInfo = Get-Item $outputFile
+            $fileSize = $fileInfo.Length
+            
+            Write-Host "`n✓ 下载成功完成！" -ForegroundColor Green
+            Write-Host "下载统计信息:" -ForegroundColor Blue
+            Write-Host "  文件大小: $([math]::Round($fileSize/1MB, 2)) MB ($fileSize 字节)" -ForegroundColor Cyan
+            Write-Host "  下载时间: $([math]::Round($downloadDuration.TotalSeconds, 1)) 秒" -ForegroundColor Cyan
+            Write-Host "  平均速度: $([math]::Round(($fileSize/1MB)/$downloadDuration.TotalSeconds, 2)) MB/秒" -ForegroundColor Cyan
+            Write-Host "  文件位置: $outputFile" -ForegroundColor Cyan
+            
+            # 执行文件完整性验证
+            Write-Host "`n正在验证文件完整性..." -ForegroundColor Yellow
+            try {
+                $calculatedHash = (Get-FileHash -Path $outputFile -Algorithm SHA256).Hash
+                if ($calculatedHash.ToUpper() -eq $targetSHA256.ToUpper()) {
+                    Write-Host "✓ SHA256哈希验证通过！文件完整无损" -ForegroundColor Green
+                } else {
+                    Write-Host "! 警告：SHA256哈希验证失败" -ForegroundColor Red
+                    Write-Host "  期望哈希: $targetSHA256" -ForegroundColor Cyan
+                    Write-Host "  实际哈希: $calculatedHash" -ForegroundColor Cyan
+                    Write-Host "建议重新下载文件以确保完整性" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "无法计算文件哈希值，但下载已完成" -ForegroundColor Yellow
+            }
+            
+            return $outputFile
+            
+        } else {
+            Write-Host "✗ 错误：下载完成但无法找到文件" -ForegroundColor Red
+            return $null
+        }
+        
+    } catch {
+        Write-Host "✗ 下载过程中发生错误" -ForegroundColor Red
+        Write-Host "错误详情: $($_.Exception.Message)" -ForegroundColor Yellow
+        
+        # 提供基于错误类型的具体建议
+        if ($_.Exception.Message -match "路径") {
+            Write-Host "建议：检查文件路径是否包含特殊字符或过长" -ForegroundColor Yellow
+        } elseif ($_.Exception.Message -match "网络" -or $_.Exception.Message -match "连接") {
+            Write-Host "建议：检查网络连接或稍后重试" -ForegroundColor Yellow
+        } else {
+            Write-Host "建议：尝试以管理员权限运行PowerShell" -ForegroundColor Yellow
+        }
+        
+        return $null
+    }
+}
+
+# 显示即将开始的操作信息
+Write-Host "准备下载APK到自定义目录..." -ForegroundColor Green
+Write-Host "目标目录: E:\应用程序" -ForegroundColor Cyan
+Write-Host "这个目录将用于存储ReCBench相关的APK文件" -ForegroundColor Yellow
+
+# 执行下载操作
+$downloadedFile = Execute-CustomDirectoryDownload
+
+# 显示最终结果和后续步骤
+if ($downloadedFile) {
+    Write-Host "`n=== 下载任务完成 ===" -ForegroundColor Magenta
+    Write-Host "APK文件已成功下载到您指定的目录中" -ForegroundColor Green
+    Write-Host "文件路径: $downloadedFile" -ForegroundColor Cyan
+    
+    Write-Host "`n后续步骤建议:" -ForegroundColor Blue
+    Write-Host "1. 确认Android模拟器正在运行" -ForegroundColor White
+    Write-Host "2. 使用adb install命令安装APK" -ForegroundColor White
+    Write-Host "3. 运行对应的ReCBench脚本进行崩溃重现测试" -ForegroundColor White
+    
+    Write-Host "`nADB安装命令示例:" -ForegroundColor Yellow
+    Write-Host "adb install -rg `"$downloadedFile`"" -ForegroundColor Cyan
+    
+} else {
+    Write-Host "`n✗ 下载未能完成，请检查上述错误信息并重试" -ForegroundColor Red
+}
